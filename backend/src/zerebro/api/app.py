@@ -1,9 +1,11 @@
 """FastAPI application -- the main entry point for the Zerebro backend.
 
 Provides:
-- ``POST /agents/run``       -- execute an agent (blocking, returns RunResult)
-- ``POST /agents/run/stream`` -- execute an agent with SSE streaming
-- ``GET  /health``            -- liveness / readiness probe
+- ``POST /agents/run``                    -- execute an agent (blocking)
+- ``POST /agents/run/stream``             -- execute an agent with SSE streaming
+- ``POST /builder/chat``                  -- conversational agent builder
+- ``POST /builder/sessions/{id}/confirm`` -- confirm a built agent
+- ``GET  /health``                        -- liveness / readiness probe
 """
 
 from __future__ import annotations
@@ -18,10 +20,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from zerebro.api.builder_routes import create_builder_router
 from zerebro.config import settings
 from zerebro.core.runner import run_agent, stream_agent
 from zerebro.core.tracing import init_tracing
 from zerebro.models.agent import AgentConfig, RunRequest, RunResult
+from zerebro.models.conversation import BuilderSession
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +54,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Zerebro",
         description="Self-hosted agent builder platform",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
@@ -63,8 +67,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # In-memory agent store (replaced by DB in Sprint 2)
+    # In-memory stores (replaced by DB in a future sprint)
     agents: dict[str, AgentConfig] = {}
+    builder_sessions: dict[str, BuilderSession] = {}
 
     # Seed a demo agent so the API is testable out of the box
     demo = AgentConfig(
@@ -78,7 +83,11 @@ def create_app() -> FastAPI:
     )
     agents[demo.id] = demo
 
-    # --- Routes -----------------------------------------------------------
+    # --- Builder routes ---------------------------------------------------
+    builder_router = create_builder_router(builder_sessions, agents)
+    app.include_router(builder_router)
+
+    # --- Agent routes -----------------------------------------------------
 
     @app.get("/health")
     async def health() -> dict[str, str]:
