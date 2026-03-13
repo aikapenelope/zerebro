@@ -5,6 +5,8 @@ Provides:
 - ``POST /agents/run/stream``             -- execute an agent with SSE streaming
 - ``POST /builder/chat``                  -- conversational agent builder
 - ``POST /builder/sessions/{id}/confirm`` -- confirm a built agent
+- ``GET  /mcp/servers``                   -- list configured MCP servers
+- ``GET  /mcp/servers/{name}/tools``      -- list tools from an MCP server
 - ``GET  /health``                        -- liveness / readiness probe
 """
 
@@ -21,13 +23,54 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from zerebro.api.builder_routes import create_builder_router
+from zerebro.api.mcp_routes import create_mcp_router
 from zerebro.config import settings
-from zerebro.core.runner import run_agent, stream_agent
+from zerebro.core.mcp_manager import MCPManager
+from zerebro.core.runner import run_agent, set_mcp_manager, stream_agent
 from zerebro.core.tracing import init_tracing
 from zerebro.models.agent import AgentConfig, RunRequest, RunResult
 from zerebro.models.conversation import BuilderSession
+from zerebro.models.mcp import MCPServerConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _load_mcp_servers_from_settings() -> list[MCPServerConfig]:
+    """Load MCP server configurations from settings / environment.
+
+    MCP servers are configured via the ``MCP_SERVERS`` environment variable
+    as a JSON array of server config objects. Example::
+
+        MCP_SERVERS='[
+            {"name": "mcp-github", "transport": "stdio",
+             "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+             "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."},
+             "description": "GitHub MCP server"},
+            {"name": "mcp-web", "transport": "streamable_http",
+             "url": "http://localhost:3001/mcp",
+             "description": "Web search MCP server"}
+        ]'
+
+    Returns:
+        List of MCPServerConfig instances. Empty if not configured.
+    """
+    mcp_servers_json = settings.mcp_servers_json
+    if not mcp_servers_json:
+        return []
+
+    import json as json_mod
+
+    try:
+        raw_configs = json_mod.loads(mcp_servers_json)
+        if not isinstance(raw_configs, list):
+            logger.error("MCP_SERVERS must be a JSON array, got %s", type(raw_configs).__name__)
+            return []
+        configs = [MCPServerConfig.model_validate(c) for c in raw_configs]
+        logger.info("Loaded %d MCP server configs from MCP_SERVERS", len(configs))
+        return configs
+    except Exception:
+        logger.exception("Failed to parse MCP_SERVERS environment variable")
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +97,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Zerebro",
         description="Self-hosted agent builder platform",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
 
@@ -83,9 +126,17 @@ def create_app() -> FastAPI:
     )
     agents[demo.id] = demo
 
-    # --- Builder routes ---------------------------------------------------
+    # --- MCP Manager ------------------------------------------------------
+    mcp_configs = _load_mcp_servers_from_settings()
+    mcp_manager = MCPManager(mcp_configs)
+    set_mcp_manager(mcp_manager)
+
+    # --- Routers ----------------------------------------------------------
     builder_router = create_builder_router(builder_sessions, agents)
     app.include_router(builder_router)
+
+    mcp_router = create_mcp_router(mcp_manager)
+    app.include_router(mcp_router)
 
     # --- Agent routes -----------------------------------------------------
 
