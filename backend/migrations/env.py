@@ -1,16 +1,18 @@
-"""Alembic environment configuration for async SQLAlchemy.
+"""Alembic environment configuration.
 
 Reads the database URL from ``zerebro.config.settings`` so there is a
 single source of truth for connection strings.
+
+Uses the **sync** database URL (``database_url_sync``) so that migrations
+can run inside an already-running async event loop (e.g., uvicorn's
+lifespan) without ``asyncio.run()`` conflicts.
 """
 
-import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from zerebro.config import settings
 from zerebro.db.models import Base
@@ -21,8 +23,8 @@ from zerebro.db.models import Base
 
 config = context.config
 
-# Override the sqlalchemy.url from the ini file with the app's setting
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Use the sync URL so we don't need asyncio.run() inside uvicorn's loop.
+config.set_main_option("sqlalchemy.url", settings.database_url_sync)
 
 # Set up Python logging from the ini file
 if config.config_file_name is not None:
@@ -58,23 +60,17 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    """Create an async engine and run migrations."""
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode using a sync engine."""
+    connectable = create_engine(
+        config.get_main_option("sqlalchemy.url", ""),
         poolclass=pool.NullPool,
     )
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
 
-    await connectable.dispose()
-
-
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode (connected to the database)."""
-    asyncio.run(run_async_migrations())
+    connectable.dispose()
 
 
 if context.is_offline_mode():

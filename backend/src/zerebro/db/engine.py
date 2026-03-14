@@ -136,7 +136,7 @@ def run_migrations() -> None:
 
     from zerebro.config import settings
 
-    alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url_sync)
 
     command.upgrade(alembic_cfg, "head")
     logger.info("Alembic migrations applied to head")
