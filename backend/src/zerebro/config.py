@@ -19,13 +19,14 @@ class Settings(BaseSettings):
     )
 
     # --- LLM Providers ---
-    openai_api_key: str = ""
+    anthropic_api_key: str = ""
     groq_api_key: str = ""
 
     # --- Model Defaults ---
     # Builder: high-reasoning model for creating agents via structured output.
-    # gpt-4.1 has superior instruction following and structured output vs gpt-4o.
-    builder_model: str = "openai:gpt-4.1"
+    # Claude Haiku 4.5 has full tool calling + structured output support,
+    # 200K context, $1/$5 per 1M tokens. Same API family as deepagents default.
+    builder_model: str = "anthropic:claude-haiku-4.5"
 
     # Worker: primary model for executing agent tasks.
     # llama-3.3-70b-versatile is a Production model on Groq (stable, battle-tested).
