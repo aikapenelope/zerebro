@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     worker_model: str = "groq:qwen/qwen3-32b"
     worker_fallback_model: str = "groq:llama-3.3-70b-versatile"
 
+    # --- MCP Servers ---
+    # JSON array of MCPServerConfig objects. See api/app.py for format.
+    mcp_servers_json: str = ""
+
     # --- Phoenix Observability ---
     phoenix_collector_endpoint: str = "http://localhost:6006/v1/traces"
 

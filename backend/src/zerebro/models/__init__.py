@@ -18,6 +18,12 @@ from zerebro.models.conversation import (
     MessageRole,
     SessionStatus,
 )
+from zerebro.models.mcp import (
+    MCPServerConfig,
+    MCPServerStatus,
+    MCPToolInfo,
+    MCPTransport,
+)
 
 __all__ = [
     "AgentConfig",
@@ -25,6 +31,10 @@ __all__ = [
     "ChatRequest",
     "ChatResponse",
     "ConversationMessage",
+    "MCPServerConfig",
+    "MCPServerStatus",
+    "MCPToolInfo",
+    "MCPTransport",
     "MessageRole",
     "ModelRole",
     "RunRequest",

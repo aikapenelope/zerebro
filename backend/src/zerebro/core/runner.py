@@ -2,8 +2,9 @@
 
 This module is the bridge between the Zerebro data model (``AgentConfig``)
 and the ``deepagents`` SDK.  It resolves the correct LLM based on the
-agent's ``model_role`` / ``model_override``, assembles sub-agents, invokes
-the compiled LangGraph graph, and returns a ``RunResult``.
+agent's ``model_role`` / ``model_override``, resolves MCP tools via the
+``MCPManager``, assembles sub-agents, invokes the compiled LangGraph graph,
+and returns a ``RunResult``.
 """
 
 from __future__ import annotations
@@ -14,10 +15,12 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from deepagents import SubAgent, create_deep_agent
+from deepagents import CompiledSubAgent, SubAgent, create_deep_agent
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.tools import BaseTool
 
 from zerebro.config import settings
+from zerebro.core.mcp_manager import MCPManager
 from zerebro.models.agent import (
     AgentConfig,
     ModelRole,
@@ -26,6 +29,29 @@ from zerebro.models.agent import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Module-level MCP manager instance, initialized by the app at startup.
+# This allows the runner to resolve tools without requiring the caller
+# to pass the manager explicitly every time.
+_mcp_manager: MCPManager | None = None
+
+
+def set_mcp_manager(manager: MCPManager) -> None:
+    """Set the module-level MCP manager instance.
+
+    Called during app startup to inject the configured manager.
+
+    Args:
+        manager: The MCPManager instance to use for tool resolution.
+    """
+    global _mcp_manager  # noqa: PLW0603
+    _mcp_manager = manager
+    logger.info("MCP manager set with servers: %s", manager.server_names)
+
+
+def get_mcp_manager() -> MCPManager | None:
+    """Get the current MCP manager instance."""
+    return _mcp_manager
 
 
 # ---------------------------------------------------------------------------
@@ -48,19 +74,45 @@ def _resolve_model_string(config: AgentConfig) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tool resolution
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_tools(tool_names: list[str]) -> list[BaseTool]:
+    """Resolve MCP server names into BaseTool instances.
+
+    Args:
+        tool_names: List of MCP server names from AgentConfig.tools.
+
+    Returns:
+        List of BaseTool instances. Empty if no manager is configured
+        or no tool names are provided.
+    """
+    if not tool_names or not _mcp_manager:
+        return []
+    return await _mcp_manager.resolve_tools(tool_names)
+
+
+# ---------------------------------------------------------------------------
 # Sub-agent assembly
 # ---------------------------------------------------------------------------
 
 
-def _build_subagents(config: AgentConfig) -> list[SubAgent]:
-    """Convert ``SubAgentConfig`` list into deepagents ``SubAgent`` dicts."""
-    subagents: list[SubAgent] = []
+async def _build_subagents(config: AgentConfig) -> list[SubAgent | CompiledSubAgent]:
+    """Convert ``SubAgentConfig`` list into deepagents ``SubAgent`` dicts.
+
+    Resolves MCP tools for each sub-agent via the MCPManager.
+    """
+    subagents: list[SubAgent | CompiledSubAgent] = []
     for sa in config.subagents:
+        # Resolve tools for this sub-agent
+        sa_tools = await _resolve_tools(sa.tools)
+
         spec: SubAgent = {  # type: ignore[typeddict-unknown-key]
             "name": sa.name,
             "description": sa.description,
             "system_prompt": sa.system_prompt,
-            "tools": [],  # MCP tools resolved in later sprints
+            "tools": sa_tools or [],
         }
         if sa.model_override:
             spec["model"] = sa.model_override  # type: ignore[typeddict-unknown-key]
@@ -94,10 +146,15 @@ async def run_agent(
 
     start = time.monotonic()
     try:
+        # Resolve MCP tools for this agent
+        tools = await _resolve_tools(config.tools)
+        subagents = await _build_subagents(config)
+
         graph = create_deep_agent(
             model=model_str,
             system_prompt=config.system_prompt,
-            subagents=_build_subagents(config) or None,
+            tools=tools or None,
+            subagents=subagents or None,
         )
 
         result = await graph.ainvoke(
@@ -176,10 +233,15 @@ async def stream_agent(
 
     start = time.monotonic()
     try:
+        # Resolve MCP tools for this agent
+        tools = await _resolve_tools(config.tools)
+        subagents = await _build_subagents(config)
+
         graph = create_deep_agent(
             model=model_str,
             system_prompt=config.system_prompt,
-            subagents=_build_subagents(config) or None,
+            tools=tools or None,
+            subagents=subagents or None,
         )
 
         final_output = ""
