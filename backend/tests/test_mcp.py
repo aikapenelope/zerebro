@@ -19,6 +19,7 @@ _STUBS = [
     "langchain",
     "langchain.agents",
     "langchain.agents.structured_output",
+    "langchain_anthropic",
     "langchain_core",
     "langchain_core.messages",
     "langchain_core.tools",
