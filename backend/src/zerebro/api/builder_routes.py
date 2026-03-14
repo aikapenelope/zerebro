@@ -73,7 +73,9 @@ def create_builder_router() -> APIRouter:
             # Run the builder
             history = session.to_history_dicts()
             lc_messages = messages_from_history(history)
-            text_response, agent_config = await run_builder_turn(lc_messages)
+            text_response, agent_config = await run_builder_turn(
+                lc_messages, session_id=session.id
+            )
 
             # Add assistant response
             session.add_message(MessageRole.ASSISTANT, text_response)
