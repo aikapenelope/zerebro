@@ -119,19 +119,20 @@ def run_migrations() -> None:
     command API is synchronous (it manages its own async engine internally
     via the async env.py template).
     """
+    import pathlib
+
     from alembic import command
     from alembic.config import Config
 
-    alembic_cfg = Config()
-    # Point at the migrations directory relative to the backend root.
-    # In Docker the workdir is /app; locally it's wherever you run from.
-    # We resolve the path from this file's location for reliability.
-    import pathlib
-
-    backend_root = pathlib.Path(__file__).resolve().parents[3]
-    alembic_cfg.set_main_option(
-        "script_location", str(backend_root / "migrations")
-    )
+    # Locate alembic.ini: in Docker it lives at /app/alembic.ini (WORKDIR),
+    # locally it's at the backend root.  We try the working directory first
+    # (Docker), then fall back to resolving from this file's location (local dev).
+    cwd_ini = pathlib.Path.cwd() / "alembic.ini"
+    if cwd_ini.is_file():
+        alembic_cfg = Config(str(cwd_ini))
+    else:
+        backend_root = pathlib.Path(__file__).resolve().parents[3]
+        alembic_cfg = Config(str(backend_root / "alembic.ini"))
 
     from zerebro.config import settings
 
