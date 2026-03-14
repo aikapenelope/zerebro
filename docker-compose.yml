@@ -29,6 +29,11 @@ services:
       - PHOENIX_WORKING_DIR=/phoenix_data
     volumes:
       - phoenix_data:/phoenix_data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6006"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # ---------------------------------------------------------------------------
   # Zerebro Backend - FastAPI + deepagents
@@ -43,12 +48,13 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-zerebro}:${POSTGRES_PASSWORD:-zerebro_dev}@postgres:5432/${POSTGRES_DB:-zerebro}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-zerebro}:${POSTGRES_PASSWORD:-zerebro_dev}@postgres:5432/${POSTGRES_DB:-zerebro}
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
     depends_on:
       postgres:
         condition: service_healthy
       phoenix:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./backend/src:/app/src:cached
 

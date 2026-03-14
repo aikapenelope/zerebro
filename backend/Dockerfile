@@ -17,6 +17,10 @@ COPY pyproject.toml ./
 # Copy source code (needed for pip install with setuptools find_packages)
 COPY src/ ./src/
 
+# Copy Alembic config and migrations (required by run_migrations() at startup)
+COPY alembic.ini ./
+COPY migrations/ ./migrations/
+
 # Install the project and all dependencies
 RUN pip install --no-cache-dir "."
 

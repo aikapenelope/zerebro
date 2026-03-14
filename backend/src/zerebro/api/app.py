@@ -32,6 +32,7 @@ from zerebro.api.builder_routes import create_builder_router
 from zerebro.api.mcp_routes import create_mcp_router
 from zerebro.config import settings
 from zerebro.core.mcp_manager import MCPManager
+from zerebro.core.memory import memory_lifespan
 from zerebro.core.runner import run_agent, set_mcp_manager, stream_agent
 from zerebro.core.tracing import init_tracing
 from zerebro.db.engine import async_session, run_migrations
@@ -103,14 +104,43 @@ async def _seed_demo_agent() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _validate_api_keys() -> None:
+    """Warn loudly if LLM API keys are missing.
+
+    The app still starts (so health checks work), but every LLM call will
+    fail with a cryptic auth error unless the keys are set.
+    """
+    missing: list[str] = []
+    if not settings.openai_api_key:
+        missing.append("OPENAI_API_KEY (required for builder agent)")
+    if not settings.groq_api_key:
+        missing.append("GROQ_API_KEY (required for worker agents)")
+    if missing:
+        logger.warning(
+            "LLM API keys not configured -- agent calls will fail:\n  - %s",
+            "\n  - ".join(missing),
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     """Application startup / shutdown hooks."""
+    _validate_api_keys()
     init_tracing()
     run_migrations()
-    await _seed_demo_agent()
-    logger.info("Zerebro backend started on %s:%s", settings.backend_host, settings.backend_port)
-    yield
+
+    # Persistent memory: checkpointer + store backed by Postgres.
+    # The context manager owns the psycopg3 connections and closes them
+    # cleanly on shutdown.
+    async with memory_lifespan():
+        await _seed_demo_agent()
+        logger.info(
+            "Zerebro backend started on %s:%s",
+            settings.backend_host,
+            settings.backend_port,
+        )
+        yield
+
     logger.info("Zerebro backend shutting down")
 
 
@@ -254,7 +284,7 @@ def create_app() -> FastAPI:
                 # Collect token chunks for the persisted run record
                 if event["event"] == "token" and isinstance(event["data"], str):
                     collected_output.append(event["data"])
-                elif event["event"] == "complete" and isinstance(event["data"], dict):
+                elif event["event"] == "done" and isinstance(event["data"], dict):
                     final_result = RunResult.model_validate(event["data"])
 
             # Persist the run result after streaming completes
