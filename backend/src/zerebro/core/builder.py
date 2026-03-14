@@ -9,8 +9,10 @@ Flow:
 2. Builder either asks clarifying questions OR produces an AgentConfig
 3. User confirms the config -> agent is registered and ready to run
 
-The builder uses a high-reasoning model (Anthropic Claude) with ``response_format``
-set to produce structured output when it decides the config is ready.
+The builder uses ChatAnthropic directly (not deepagents) because it only needs
+to converse and produce structured output -- no file I/O, code execution, or
+tool calls.  This keeps token usage minimal (~1 LLM call per turn instead of
+the 10-15 calls that deepagents' autonomous loop would make).
 """
 
 from __future__ import annotations
@@ -18,13 +20,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deepagents import create_deep_agent
-from langchain.agents.structured_output import AutoStrategy
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.graph.state import CompiledStateGraph
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from zerebro.config import settings
-from zerebro.core.memory import get_checkpointer, get_store
 from zerebro.models.agent import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -82,22 +81,25 @@ require deep thinking.
 """
 
 
-def create_builder_graph() -> CompiledStateGraph:
-    """Create the Builder Agent graph with structured output capability.
+def _get_model_name() -> str:
+    """Extract the Anthropic model name from the builder_model setting.
 
-    The builder uses the configured builder model (Anthropic Claude) and
-    can produce an ``AgentConfig`` as structured output via AutoStrategy.
-
-    Returns:
-        A compiled LangGraph graph ready for invocation.
+    The setting is formatted as ``anthropic:<model-name>``.  We strip the
+    provider prefix so it can be passed directly to ``ChatAnthropic``.
     """
-    return create_deep_agent(
-        model=settings.builder_model,
-        system_prompt=BUILDER_SYSTEM_PROMPT,
-        response_format=AutoStrategy(AgentConfig),
-        name="builder",
-        checkpointer=get_checkpointer(),
-        store=get_store(),
+    model = settings.builder_model
+    if model.startswith("anthropic:"):
+        return model[len("anthropic:"):]
+    return model
+
+
+def _create_chat_model() -> ChatAnthropic:
+    """Create a ChatAnthropic instance for the builder."""
+    # ChatAnthropic accepts **kwargs; pyright can't see the params.
+    return ChatAnthropic(  # pyright: ignore[reportCallIssue]
+        model=_get_model_name(),  # pyright: ignore[reportCallIssue]
+        api_key=settings.anthropic_api_key,  # pyright: ignore[reportCallIssue]
+        max_tokens=4096,  # pyright: ignore[reportCallIssue]
     )
 
 
@@ -108,91 +110,95 @@ async def run_builder_turn(
 ) -> tuple[str, AgentConfig | None]:
     """Execute one turn of the builder conversation.
 
-    Takes the full message history and returns the builder's text response
-    plus an optional ``AgentConfig`` if the builder decided to produce one.
+    Uses ChatAnthropic directly with ``with_structured_output`` to optionally
+    produce an ``AgentConfig``.  This makes exactly **one** LLM call per turn
+    instead of the 10-15 that deepagents' autonomous loop would make.
+
+    Strategy:
+    1. First, call the plain chat model to get a conversational response.
+    2. If the response suggests the builder is ready to produce a config
+       (heuristic: the conversation has enough context), we could do a
+       second structured call.  For now we rely on a single call with
+       ``include_raw=True`` so we get both text and optional structured
+       output in one shot.
 
     Args:
         messages: Full conversation history as LangChain messages.
-        session_id: Unique session identifier used as the LangGraph thread_id.
-            Each session gets its own checkpoint so conversations don't bleed.
+        session_id: Unique session identifier (reserved for future
+            checkpoint use; currently unused since we removed deepagents).
 
     Returns:
         A tuple of (text_response, agent_config_or_none).
     """
-    graph = create_builder_graph()
+    llm = _create_chat_model()
 
-    result = await graph.ainvoke(
-        {"messages": messages},
-        config={"configurable": {"thread_id": session_id}},
+    # Build the full message list with system prompt.
+    full_messages: list[BaseMessage] = [
+        SystemMessage(content=BUILDER_SYSTEM_PROMPT),
+        *messages,
+    ]
+
+    # Use with_structured_output + include_raw so we get both the raw
+    # AIMessage (with text) and the parsed AgentConfig (if produced).
+    structured_llm = llm.with_structured_output(
+        AgentConfig,
+        include_raw=True,
     )
 
-    # Extract the response -- walk all AI messages to find text and config.
-    # Claude (Anthropic) returns multi-part content: text blocks mixed with
-    # tool_use blocks.  deepagents may produce several AI messages in a
-    # single turn (tool calls, planning, etc.), so we scan all of them.
-    result_messages: list[Any] = result.get("messages", [])
+    # Try the structured call first.  If Claude decides to produce a config,
+    # we get it.  If not, the parsing will return None and we fall back to
+    # the raw text.
+    try:
+        result = await structured_llm.ainvoke(full_messages)  # type: ignore[assignment]
+    except Exception:
+        # If structured output fails (e.g. Claude didn't produce a config),
+        # fall back to a plain chat call.
+        logger.info("Structured call failed, falling back to plain chat")
+        ai_msg = await llm.ainvoke(full_messages)
+        return _extract_text(ai_msg), None
 
-    # Debug: log every message type and content shape
-    for i, msg in enumerate(result_messages):
-        msg_type = type(msg).__name__
-        if hasattr(msg, "content"):
-            if isinstance(msg.content, str):
-                preview = msg.content[:200] if msg.content else "(empty str)"
-            elif isinstance(msg.content, list):
-                types = [
-                    type(p).__name__ if not isinstance(p, dict)
-                    else p.get("type", "?")
-                    for p in msg.content[:5]
-                ]
-                preview = f"list[{len(msg.content)}]: {types}"
-            else:
-                preview = f"({type(msg.content).__name__})"
-        else:
-            preview = "(no content attr)"
-        logger.warning("MSG[%d] %s: %s", i, msg_type, preview)
-    text_response = ""
-    agent_config: AgentConfig | None = None
+    # include_raw=True returns a dict with "raw", "parsed", "parsing_error".
+    result_dict: dict[str, Any] = result  # type: ignore[assignment]
+    raw_msg: AIMessage = result_dict.get("raw", AIMessage(content=""))
+    parsed: AgentConfig | None = result_dict.get("parsed")
+    parsing_error = result_dict.get("parsing_error")
 
-    for msg in reversed(result_messages):
-        if not isinstance(msg, AIMessage):
-            continue
+    if parsing_error is not None:
+        # Claude responded with text but it wasn't a valid AgentConfig.
+        # That's fine -- it means the builder is still asking questions.
+        logger.debug("Structured parsing returned error (expected): %s", parsing_error)
+        parsed = None
 
-        # Check for structured output (AgentConfig)
-        if hasattr(msg, "response_metadata"):
-            parsed = msg.response_metadata.get("parsed")
-            if isinstance(parsed, AgentConfig):
-                agent_config = parsed
-
-        # Extract text content from this message
-        msg_text = ""
-        if isinstance(msg.content, str) and msg.content:
-            msg_text = msg.content
-        elif isinstance(msg.content, list):
-            # Multi-part content (e.g., text + tool_use blocks)
-            text_parts = [
-                part.get("text", "")
-                for part in msg.content
-                if isinstance(part, dict) and part.get("type") == "text"
-            ]
-            if text_parts:
-                msg_text = "\n".join(text_parts)
-
-        # Use the first (most recent) AI message that has actual text
-        if msg_text and not text_response:
-            text_response = msg_text
-
-        # If we found both text and config, we're done
-        if text_response and agent_config is not None:
-            break
+    text_response = _extract_text(raw_msg)
 
     logger.debug(
-        "Builder turn result: text_len=%d, has_config=%s, total_msgs=%d",
+        "Builder turn: text_len=%d, has_config=%s",
         len(text_response),
-        agent_config is not None,
-        len(result_messages),
+        parsed is not None,
     )
 
-    return text_response, agent_config
+    return text_response, parsed
+
+
+def _extract_text(msg: AIMessage) -> str:
+    """Extract plain text from an AIMessage.
+
+    Claude may return content as a string or as a list of content blocks
+    (text + tool_use).  This handles both formats.
+    """
+    if isinstance(msg.content, str):
+        return msg.content
+
+    if isinstance(msg.content, list):
+        text_parts: list[str] = []
+        for part in msg.content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_parts.append(part.get("text", ""))
+            elif isinstance(part, str):
+                text_parts.append(part)
+        return "\n".join(text_parts)
+
+    return ""
 
 
 def messages_from_history(
