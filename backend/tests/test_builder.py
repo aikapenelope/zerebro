@@ -19,7 +19,6 @@ _STUBS = [
     "langchain",
     "langchain.agents",
     "langchain.agents.structured_output",
-    "langchain.chat_models",
     "langchain_core",
     "langchain_core.messages",
     "langgraph",
