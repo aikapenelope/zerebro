@@ -95,6 +95,19 @@ export async function streamAgent(req: RunRequest): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
+// Run history
+// ---------------------------------------------------------------------------
+
+export async function getAgentRuns(
+  agentId: string,
+  limit = 50,
+): Promise<RunResult[]> {
+  return request<RunResult[]>(
+    `/agents/${encodeURIComponent(agentId)}/runs?limit=${limit}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Builder (Twin mode)
 // ---------------------------------------------------------------------------
 

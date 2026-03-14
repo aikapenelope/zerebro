@@ -100,14 +100,29 @@ class TestBuilderSession:
 
 @pytest.fixture
 async def client():  # type: ignore[no-untyped-def]
-    """Async HTTP client with builder LLM mocked."""
-    with patch("zerebro.core.tracing.init_tracing"):
-        from zerebro.api.app import create_app
+    """Async HTTP client backed by a fresh in-memory SQLite database."""
+    from sqlalchemy.ext.asyncio import create_async_engine
 
+    from zerebro.db.engine import set_engine
+
+    test_engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+    set_engine(test_engine)
+
+    from zerebro.db.engine import init_db
+
+    await init_db()
+
+    from zerebro.api.app import _seed_demo_agent, create_app
+
+    await _seed_demo_agent()
+
+    with patch("zerebro.core.tracing.init_tracing"):
         app = create_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
+
+    await test_engine.dispose()
 
 
 class TestBuilderChat:
