@@ -3,6 +3,8 @@
 Uses httpx async client with the FastAPI test client. The runner module is
 patched at the module level to avoid requiring deepagents (which needs
 Docker to install properly on this platform).
+
+Database: Each test gets a fresh in-memory SQLite database via ``set_engine()``.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import create_async_engine
 
 # ---------------------------------------------------------------------------
 # Stub out third-party modules that aren't available in the build env.
@@ -57,22 +60,44 @@ for _mod_name in _STUBS:
 _sse_mod = sys.modules["sse_starlette.sse"]
 _sse_mod.EventSourceResponse = MagicMock()  # type: ignore[union-attr]
 
-# Now we can safely import the app
+# Now we can safely import app-level modules
+from zerebro.db.engine import set_engine  # noqa: E402
 from zerebro.models.agent import RunResult, RunStatus  # noqa: E402
 
 
 @pytest.fixture
 async def client():  # type: ignore[no-untyped-def]
-    """Async HTTP client bound to the test app with lifespan triggered."""
-    with patch("zerebro.core.tracing.init_tracing"):
-        from zerebro.api.app import create_app
+    """Async HTTP client backed by a fresh in-memory SQLite database.
 
+    Each test gets its own database so tests are fully isolated.
+    We manually create tables and seed the demo agent because httpx's
+    ASGITransport does not trigger ASGI lifespan events.
+    """
+    # Create a fresh in-memory SQLite engine BEFORE importing app modules
+    # so the lazy engine in db.engine never tries to connect to PostgreSQL.
+    test_engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        echo=False,
+    )
+    set_engine(test_engine)
+
+    from zerebro.db.engine import init_db
+
+    await init_db()
+
+    # Import after engine is set so module-level app = create_app() uses SQLite
+    from zerebro.api.app import _seed_demo_agent, create_app
+
+    await _seed_demo_agent()
+
+    with patch("zerebro.core.tracing.init_tracing"):
         app = create_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            # Trigger lifespan startup by making a request
-            # The ASGI transport handles lifespan events automatically
             yield ac
+
+    # Dispose the engine after the test
+    await test_engine.dispose()
 
 
 class TestHealth:
@@ -118,7 +143,6 @@ class TestAgentCRUD:
         list_resp = await client.get("/agents")
         ids = [a["id"] for a in list_resp.json()]
         assert data["id"] in ids
-
 
     @pytest.mark.asyncio
     async def test_update_agent(self, client: AsyncClient) -> None:
@@ -196,3 +220,43 @@ class TestRunAgent:
         assert data["status"] == "completed"
         assert data["output"] == "Hello! I'm the demo agent."
         assert data["duration_ms"] == 100
+
+
+class TestRunHistory:
+    @pytest.mark.asyncio
+    async def test_list_runs_empty(self, client: AsyncClient) -> None:
+        """A fresh agent has no run history."""
+        resp = await client.get("/agents/demo/runs")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    @pytest.mark.asyncio
+    async def test_list_runs_after_execution(self, client: AsyncClient) -> None:
+        """After running an agent, the run appears in history."""
+        mock_result = RunResult(
+            agent_id="demo",
+            status=RunStatus.COMPLETED,
+            output="Test output",
+            duration_ms=50,
+        )
+        with patch(
+            "zerebro.api.app.run_agent",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            await client.post(
+                "/agents/run",
+                json={"agent_id": "demo", "message": "test run"},
+            )
+
+        resp = await client.get("/agents/demo/runs")
+        assert resp.status_code == 200
+        runs = resp.json()
+        assert len(runs) == 1
+        assert runs[0]["agent_id"] == "demo"
+        assert runs[0]["output"] == "Test output"
+
+    @pytest.mark.asyncio
+    async def test_list_runs_nonexistent_agent(self, client: AsyncClient) -> None:
+        resp = await client.get("/agents/nonexistent/runs")
+        assert resp.status_code == 404
