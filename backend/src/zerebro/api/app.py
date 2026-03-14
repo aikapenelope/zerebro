@@ -1,13 +1,18 @@
 """FastAPI application -- the main entry point for the Zerebro backend.
 
 Provides:
-- ``POST /agents/run``                    -- execute an agent (blocking)
-- ``POST /agents/run/stream``             -- execute an agent with SSE streaming
-- ``POST /builder/chat``                  -- conversational agent builder
-- ``POST /builder/sessions/{id}/confirm`` -- confirm a built agent
-- ``GET  /mcp/servers``                   -- list configured MCP servers
-- ``GET  /mcp/servers/{name}/tools``      -- list tools from an MCP server
-- ``GET  /health``                        -- liveness / readiness probe
+- ``GET    /agents``                       -- list all agents
+- ``POST   /agents``                       -- create an agent
+- ``GET    /agents/{id}``                  -- get an agent
+- ``PATCH  /agents/{id}``                  -- partially update an agent
+- ``DELETE /agents/{id}``                  -- delete an agent
+- ``POST   /agents/run``                   -- execute an agent (blocking)
+- ``POST   /agents/run/stream``            -- execute an agent with SSE streaming
+- ``POST   /builder/chat``                 -- conversational agent builder
+- ``POST   /builder/sessions/{id}/confirm``-- confirm a built agent
+- ``GET    /mcp/servers``                  -- list configured MCP servers
+- ``GET    /mcp/servers/{name}/tools``     -- list tools from an MCP server
+- ``GET    /health``                       -- liveness / readiness probe
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from zerebro.config import settings
 from zerebro.core.mcp_manager import MCPManager
 from zerebro.core.runner import run_agent, set_mcp_manager, stream_agent
 from zerebro.core.tracing import init_tracing
-from zerebro.models.agent import AgentConfig, RunRequest, RunResult
+from zerebro.models.agent import AgentConfig, AgentUpdate, RunRequest, RunResult
 from zerebro.models.conversation import BuilderSession
 from zerebro.models.mcp import MCPServerConfig
 
@@ -164,6 +169,35 @@ def create_app() -> FastAPI:
         if not agent:
             return JSONResponse(status_code=404, content={"detail": "Agent not found"})
         return agent
+
+    @app.patch("/agents/{agent_id}", response_model=AgentConfig)
+    async def update_agent(agent_id: str, update: AgentUpdate) -> AgentConfig | JSONResponse:
+        """Partially update an agent configuration.
+
+        Only fields present in the request body are applied.
+        """
+        agent = agents.get(agent_id)
+        if not agent:
+            return JSONResponse(status_code=404, content={"detail": "Agent not found"})
+
+        # Apply only the fields that were explicitly provided
+        update_data = update.model_dump(exclude_unset=True)
+        updated = agent.model_copy(update=update_data)
+        agents[agent_id] = updated
+        logger.info(
+            "Updated agent %s (%s), fields: %s",
+            updated.name, agent_id, list(update_data.keys()),
+        )
+        return updated
+
+    @app.delete("/agents/{agent_id}", status_code=204, response_model=None)
+    async def delete_agent(agent_id: str) -> JSONResponse | None:
+        """Delete an agent by ID."""
+        if agent_id not in agents:
+            return JSONResponse(status_code=404, content={"detail": "Agent not found"})
+        del agents[agent_id]
+        logger.info("Deleted agent %s", agent_id)
+        return None
 
     @app.post("/agents/run", response_model=RunResult)
     async def run_agent_endpoint(request: RunRequest) -> RunResult | JSONResponse:

@@ -141,6 +141,22 @@ class AgentConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class AgentUpdate(BaseModel):
+    """Partial update for an agent configuration.
+
+    All fields are optional -- only provided fields are applied.
+    """
+
+    name: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    model_role: ModelRole | None = None
+    model_override: str | None = None
+    tools: list[str] | None = None
+    subagents: list[SubAgentConfig] | None = None
+    triggers: list[TriggerConfig] | None = None
+
+
 class RunRequest(BaseModel):
     """Request to execute an agent."""
 
