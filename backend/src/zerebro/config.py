@@ -12,9 +12,10 @@ class Settings(BaseSettings):
     )
 
     # Sync URL for Alembic and LangGraph checkpointer (psycopg3).
-    # Derived from database_url by default; override if needed.
+    # Must use the +psycopg driver prefix so SQLAlchemy uses psycopg3
+    # instead of the absent psycopg2.
     database_url_sync: str = (
-        "postgresql://zerebro:zerebro_dev@localhost:5432/zerebro"
+        "postgresql+psycopg://zerebro:zerebro_dev@localhost:5432/zerebro"
     )
 
     # --- LLM Providers ---
