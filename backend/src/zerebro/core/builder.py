@@ -127,6 +127,20 @@ async def run_builder_turn(
     # tool_use blocks.  deepagents may produce several AI messages in a
     # single turn (tool calls, planning, etc.), so we scan all of them.
     result_messages: list[Any] = result.get("messages", [])
+
+    # Debug: log every message type and content shape
+    for i, msg in enumerate(result_messages):
+        msg_type = type(msg).__name__
+        if hasattr(msg, "content"):
+            if isinstance(msg.content, str):
+                preview = msg.content[:200] if msg.content else "(empty str)"
+            elif isinstance(msg.content, list):
+                preview = f"list[{len(msg.content)}]: {[type(p).__name__ if not isinstance(p, dict) else p.get('type', '?') for p in msg.content[:5]]}"
+            else:
+                preview = f"({type(msg.content).__name__})"
+        else:
+            preview = "(no content attr)"
+        logger.warning("MSG[%d] %s: %s", i, msg_type, preview)
     text_response = ""
     agent_config: AgentConfig | None = None
 
