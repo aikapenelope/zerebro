@@ -35,7 +35,7 @@ from zerebro.core.mcp_manager import MCPManager
 from zerebro.core.memory import memory_lifespan
 from zerebro.core.runner import run_agent, set_mcp_manager, stream_agent
 from zerebro.core.tracing import init_tracing
-from zerebro.db.engine import async_session, run_migrations
+from zerebro.db.engine import async_session
 from zerebro.db.repositories import AgentRepository, RunRepository
 from zerebro.models.agent import AgentConfig, AgentUpdate, RunRequest, RunResult
 from zerebro.models.mcp import MCPServerConfig
@@ -124,10 +124,15 @@ def _validate_api_keys() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
-    """Application startup / shutdown hooks."""
+    """Application startup / shutdown hooks.
+
+    Note: database migrations are handled by the Docker entrypoint
+    (``entrypoint.sh``) *before* uvicorn starts.  This avoids the
+    asyncio.run() conflict that occurs when Alembic runs inside an
+    already-running event loop.
+    """
     _validate_api_keys()
     init_tracing()
-    run_migrations()
 
     # Persistent memory: checkpointer + store backed by Postgres.
     # The context manager owns the psycopg3 connections and closes them

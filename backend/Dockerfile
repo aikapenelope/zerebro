@@ -17,14 +17,20 @@ COPY pyproject.toml ./
 # Copy source code (needed for pip install with setuptools find_packages)
 COPY src/ ./src/
 
-# Copy Alembic config and migrations (required by run_migrations() at startup)
+# Copy Alembic config and migrations
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
 
 # Install the project and all dependencies
 RUN pip install --no-cache-dir "."
 
+# Copy entrypoint script (runs migrations before uvicorn)
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
+
 EXPOSE 8000
+
+ENTRYPOINT ["./entrypoint.sh"]
 
 # Use --reload for dev; override CMD in production
 CMD ["uvicorn", "zerebro.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

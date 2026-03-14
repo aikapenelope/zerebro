@@ -114,10 +114,9 @@ async def init_db() -> None:
 def run_migrations() -> None:
     """Run Alembic migrations to ``head``.
 
-    Called during application startup so the database schema is always
-    up-to-date.  This is a **synchronous** function because Alembic's
-    command API is synchronous (it manages its own async engine internally
-    via the async env.py template).
+    In production this is called by ``entrypoint.sh`` (via the ``alembic``
+    CLI) **before** uvicorn starts, avoiding asyncio event-loop conflicts.
+    This Python wrapper is kept for local development and testing.
     """
     import pathlib
 
