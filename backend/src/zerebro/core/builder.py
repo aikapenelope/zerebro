@@ -122,7 +122,10 @@ async def run_builder_turn(
         config={"configurable": {"thread_id": "builder"}},
     )
 
-    # Extract the response
+    # Extract the response -- walk all AI messages to find text and config.
+    # Claude (Anthropic) returns multi-part content: text blocks mixed with
+    # tool_use blocks.  deepagents may produce several AI messages in a
+    # single turn (tool calls, planning, etc.), so we scan all of them.
     result_messages: list[Any] = result.get("messages", [])
     text_response = ""
     agent_config: AgentConfig | None = None
@@ -137,11 +140,11 @@ async def run_builder_turn(
             if isinstance(parsed, AgentConfig):
                 agent_config = parsed
 
-        # Extract text content
+        # Extract text content from this message
+        msg_text = ""
         if isinstance(msg.content, str) and msg.content:
-            text_response = msg.content
-            break
-        if isinstance(msg.content, list):
+            msg_text = msg.content
+        elif isinstance(msg.content, list):
             # Multi-part content (e.g., text + tool_use blocks)
             text_parts = [
                 part.get("text", "")
@@ -149,8 +152,22 @@ async def run_builder_turn(
                 if isinstance(part, dict) and part.get("type") == "text"
             ]
             if text_parts:
-                text_response = "\n".join(text_parts)
-                break
+                msg_text = "\n".join(text_parts)
+
+        # Use the first (most recent) AI message that has actual text
+        if msg_text and not text_response:
+            text_response = msg_text
+
+        # If we found both text and config, we're done
+        if text_response and agent_config is not None:
+            break
+
+    logger.debug(
+        "Builder turn result: text_len=%d, has_config=%s, total_msgs=%d",
+        len(text_response),
+        agent_config is not None,
+        len(result_messages),
+    )
 
     return text_response, agent_config
 
