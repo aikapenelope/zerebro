@@ -17,6 +17,7 @@ the 10-15 calls that deepagents' autonomous loop would make).
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -70,8 +71,22 @@ Produce the agent configuration when:
 - You've written a good system prompt for it
 - The user has confirmed they're happy with the plan
 
-When you produce the configuration, output it as a structured AgentConfig. \
-Do NOT output JSON in your text response -- use the structured output format.
+When ready, include a JSON block in your response fenced with \
+```agent_config ... ``` containing the AgentConfig fields. Example:
+
+```agent_config
+{
+  "name": "My Agent",
+  "description": "Does X",
+  "system_prompt": "You are an agent that ...",
+  "model_role": "worker",
+  "tools": [],
+  "subagents": [],
+  "triggers": []
+}
+```
+
+Always include a conversational message alongside the config block.
 
 ## Available model tiers
 
@@ -110,22 +125,18 @@ async def run_builder_turn(
 ) -> tuple[str, AgentConfig | None]:
     """Execute one turn of the builder conversation.
 
-    Uses ChatAnthropic directly with ``with_structured_output`` to optionally
-    produce an ``AgentConfig``.  This makes exactly **one** LLM call per turn
-    instead of the 10-15 that deepagents' autonomous loop would make.
+    Uses a plain ChatAnthropic call (no tool calling, no structured output
+    forcing).  The builder is instructed to include a fenced
+    ``agent_config`` JSON block when it's ready to propose a config.
+    We parse that block out of the response text.
 
-    Strategy:
-    1. First, call the plain chat model to get a conversational response.
-    2. If the response suggests the builder is ready to produce a config
-       (heuristic: the conversation has enough context), we could do a
-       second structured call.  For now we rely on a single call with
-       ``include_raw=True`` so we get both text and optional structured
-       output in one shot.
+    This approach avoids the problem where ``with_structured_output`` forces
+    Claude into tool-calling mode, which swallows the conversational text
+    when Claude just wants to ask clarifying questions.
 
     Args:
         messages: Full conversation history as LangChain messages.
-        session_id: Unique session identifier (reserved for future
-            checkpoint use; currently unused since we removed deepagents).
+        session_id: Unique session identifier (reserved for future use).
 
     Returns:
         A tuple of (text_response, agent_config_or_none).
@@ -138,46 +149,23 @@ async def run_builder_turn(
         *messages,
     ]
 
-    # Use with_structured_output + include_raw so we get both the raw
-    # AIMessage (with text) and the parsed AgentConfig (if produced).
-    structured_llm = llm.with_structured_output(
-        AgentConfig,
-        include_raw=True,
-    )
-
-    # Try the structured call first.  If Claude decides to produce a config,
-    # we get it.  If not, the parsing will return None and we fall back to
-    # the raw text.
     try:
-        result = await structured_llm.ainvoke(full_messages)  # type: ignore[assignment]
-    except Exception:
-        # If structured output fails (e.g. Claude didn't produce a config),
-        # fall back to a plain chat call.
-        logger.info("Structured call failed, falling back to plain chat")
-        ai_msg = await llm.ainvoke(full_messages)
-        return _extract_text(ai_msg), None
+        ai_msg: AIMessage = await llm.ainvoke(full_messages)
+    except Exception as exc:
+        print(f"[builder] LLM call failed: {type(exc).__name__}: {exc}", flush=True)
+        raise
 
-    # include_raw=True returns a dict with "raw", "parsed", "parsing_error".
-    result_dict: dict[str, Any] = result  # type: ignore[assignment]
-    raw_msg: AIMessage = result_dict.get("raw", AIMessage(content=""))
-    parsed: AgentConfig | None = result_dict.get("parsed")
-    parsing_error = result_dict.get("parsing_error")
+    text = _extract_text(ai_msg)
+    print(f"[builder] response length={len(text)}", flush=True)
 
-    if parsing_error is not None:
-        # Claude responded with text but it wasn't a valid AgentConfig.
-        # That's fine -- it means the builder is still asking questions.
-        logger.debug("Structured parsing returned error (expected): %s", parsing_error)
-        parsed = None
+    # Try to extract an AgentConfig from a fenced ```agent_config block.
+    agent_config = _parse_agent_config(text)
 
-    text_response = _extract_text(raw_msg)
+    # Strip the fenced block from the user-visible response if present.
+    if agent_config is not None:
+        text = _strip_config_block(text)
 
-    logger.debug(
-        "Builder turn: text_len=%d, has_config=%s",
-        len(text_response),
-        parsed is not None,
-    )
-
-    return text_response, parsed
+    return text, agent_config
 
 
 def _extract_text(msg: AIMessage) -> str:
@@ -199,6 +187,44 @@ def _extract_text(msg: AIMessage) -> str:
         return "\n".join(text_parts)
 
     return ""
+
+
+def _parse_agent_config(text: str) -> AgentConfig | None:
+    """Try to extract an AgentConfig from a fenced code block in the text.
+
+    Looks for ```agent_config ... ``` or ```json ... ``` blocks that
+    contain valid AgentConfig JSON.
+    """
+    import re
+
+    # Match ```agent_config { ... } ``` blocks
+    pattern = r"```agent_config\s*\n?(.*?)\n?```"
+    match = re.search(pattern, text, re.DOTALL)
+
+    if not match:
+        # Also try ```json blocks as a fallback
+        pattern = r"```json\s*\n?(.*?)\n?```"
+        match = re.search(pattern, text, re.DOTALL)
+
+    if not match:
+        return None
+
+    json_str = match.group(1).strip()
+    try:
+        data: dict[str, Any] = json.loads(json_str)
+        return AgentConfig(**data)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"[builder] Failed to parse agent_config: {exc}", flush=True)
+        return None
+
+
+def _strip_config_block(text: str) -> str:
+    """Remove the fenced agent_config or json block from the response text."""
+    import re
+
+    text = re.sub(r"```agent_config\s*\n?.*?\n?```", "", text, flags=re.DOTALL)
+    text = re.sub(r"```json\s*\n?.*?\n?```", "", text, flags=re.DOTALL)
+    return text.strip()
 
 
 def messages_from_history(

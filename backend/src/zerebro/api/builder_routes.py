@@ -73,9 +73,16 @@ def create_builder_router() -> APIRouter:
             # Run the builder
             history = session.to_history_dicts()
             lc_messages = messages_from_history(history)
-            text_response, agent_config = await run_builder_turn(
-                lc_messages, session_id=session.id
-            )
+            try:
+                text_response, agent_config = await run_builder_turn(
+                    lc_messages, session_id=session.id
+                )
+            except Exception as exc:
+                logger.error("Builder LLM call failed: %s", exc)
+                return JSONResponse(
+                    status_code=502,
+                    content={"detail": f"LLM call failed: {type(exc).__name__}"},
+                )
 
             # Add assistant response
             session.add_message(MessageRole.ASSISTANT, text_response)
