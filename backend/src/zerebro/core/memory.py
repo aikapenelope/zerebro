@@ -58,6 +58,10 @@ async def memory_lifespan() -> AsyncIterator[None]:
     global _checkpointer, _store  # noqa: PLW0603
 
     conn_str = settings.database_url_sync
+    # LangGraph's Postgres backends use psycopg3 directly (not SQLAlchemy),
+    # so the connection string must be a plain libpq URI without the
+    # "+psycopg" SQLAlchemy driver prefix.
+    conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
     logger.info(
         "Initialising LangGraph Postgres memory (%s)",
         conn_str.split("@")[-1],
