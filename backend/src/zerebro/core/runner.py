@@ -21,6 +21,7 @@ from langchain_core.tools import BaseTool
 
 from zerebro.config import settings
 from zerebro.core.mcp_manager import MCPManager
+from zerebro.core.memory import get_checkpointer, get_store
 from zerebro.models.agent import (
     AgentConfig,
     ModelRole,
@@ -71,6 +72,20 @@ def _resolve_model_string(config: AgentConfig) -> str:
     if config.model_role == ModelRole.BUILDER:
         return settings.builder_model
     return settings.worker_model
+
+
+def _resolve_fallback_model(config: AgentConfig) -> str | None:
+    """Return a fallback model string, or None if no fallback is available.
+
+    Fallback only applies to worker agents (builder uses OpenAI which is
+    highly reliable). If the user set an explicit override, there is no
+    automatic fallback.
+    """
+    if config.model_override:
+        return None
+    if config.model_role == ModelRole.WORKER and settings.worker_fallback_model:
+        return settings.worker_fallback_model
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -125,12 +140,38 @@ async def _build_subagents(config: AgentConfig) -> list[SubAgent | CompiledSubAg
 # ---------------------------------------------------------------------------
 
 
+async def _invoke_agent(
+    model_str: str,
+    config: AgentConfig,
+    message: str,
+    run_id: str,
+    tools: list[BaseTool],
+    subagents: list[SubAgent | CompiledSubAgent],
+) -> dict[str, Any]:
+    """Build and invoke a deep agent graph, returning the raw result dict."""
+    graph = create_deep_agent(
+        model=model_str,
+        system_prompt=config.system_prompt,
+        tools=tools or None,
+        subagents=subagents or None,
+        checkpointer=get_checkpointer(),
+        store=get_store(),
+    )
+    return await graph.ainvoke(
+        {"messages": [HumanMessage(content=message)]},
+        config={"configurable": {"thread_id": run_id}},
+    )
+
+
 async def run_agent(
     config: AgentConfig,
     message: str,
     context: dict[str, Any] | None = None,
 ) -> RunResult:
-    """Execute an agent synchronously (non-streaming) and return the result.
+    """Execute an agent (non-streaming) and return the result.
+
+    If the primary model fails and a fallback is configured, retries once
+    with the fallback model before returning a failure.
 
     Args:
         config: The agent configuration produced by the Builder Agent.
@@ -142,6 +183,7 @@ async def run_agent(
     """
     run_id = str(uuid.uuid4())
     model_str = _resolve_model_string(config)
+    fallback_model = _resolve_fallback_model(config)
     logger.info("Running agent %s (%s) with model %s", config.name, config.id, model_str)
 
     start = time.monotonic()
@@ -150,17 +192,23 @@ async def run_agent(
         tools = await _resolve_tools(config.tools)
         subagents = await _build_subagents(config)
 
-        graph = create_deep_agent(
-            model=model_str,
-            system_prompt=config.system_prompt,
-            tools=tools or None,
-            subagents=subagents or None,
-        )
-
-        result = await graph.ainvoke(
-            {"messages": [HumanMessage(content=message)]},
-            config={"configurable": {"thread_id": run_id}},
-        )
+        # Try primary model, fall back if configured
+        try:
+            result = await _invoke_agent(
+                model_str, config, message, run_id, tools, subagents
+            )
+        except Exception:
+            if not fallback_model or fallback_model == model_str:
+                raise
+            logger.warning(
+                "Primary model %s failed for agent %s, retrying with fallback %s",
+                model_str,
+                config.id,
+                fallback_model,
+            )
+            result = await _invoke_agent(
+                fallback_model, config, message, run_id, tools, subagents
+            )
 
         # Extract the final AI message from the result
         messages = result.get("messages", [])
@@ -242,6 +290,8 @@ async def stream_agent(
             system_prompt=config.system_prompt,
             tools=tools or None,
             subagents=subagents or None,
+            checkpointer=get_checkpointer(),
+            store=get_store(),
         )
 
         final_output = ""

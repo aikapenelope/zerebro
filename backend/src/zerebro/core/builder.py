@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from zerebro.config import settings
+from zerebro.core.memory import get_checkpointer, get_store
 from zerebro.models.agent import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,8 @@ def create_builder_graph() -> CompiledStateGraph:
         system_prompt=BUILDER_SYSTEM_PROMPT,
         response_format=AutoStrategy(AgentConfig),
         name="builder",
+        checkpointer=get_checkpointer(),
+        store=get_store(),
     )
 
 
@@ -105,6 +108,11 @@ async def run_builder_turn(
 
     Takes the full message history and returns the builder's text response
     plus an optional ``AgentConfig`` if the builder decided to produce one.
+
+    The structured output is extracted from ``result["structured_response"]``
+    which is the documented deepagents / LangChain create_agent API.  When
+    the model decides to produce an AgentConfig, it appears there as a
+    validated Pydantic instance.
 
     Args:
         messages: Full conversation history as LangChain messages.
@@ -119,22 +127,19 @@ async def run_builder_turn(
         config={"configurable": {"thread_id": "builder"}},
     )
 
-    # Extract the response
+    # --- Structured output (the documented API) ---
+    agent_config: AgentConfig | None = None
+    structured = result.get("structured_response")
+    if isinstance(structured, AgentConfig):
+        agent_config = structured
+
+    # --- Text response from the last AI message ---
     result_messages: list[Any] = result.get("messages", [])
     text_response = ""
-    agent_config: AgentConfig | None = None
 
     for msg in reversed(result_messages):
         if not isinstance(msg, AIMessage):
             continue
-
-        # Check for structured output (AgentConfig)
-        if hasattr(msg, "response_metadata"):
-            parsed = msg.response_metadata.get("parsed")
-            if isinstance(parsed, AgentConfig):
-                agent_config = parsed
-
-        # Extract text content
         if isinstance(msg.content, str) and msg.content:
             text_response = msg.content
             break

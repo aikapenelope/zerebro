@@ -11,17 +11,28 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://zerebro:zerebro_dev@localhost:5432/zerebro"
     )
 
-    # --- Redis ---
-    redis_url: str = "redis://localhost:6379/0"
+    # Sync URL for Alembic and LangGraph checkpointer (psycopg3).
+    # Derived from database_url by default; override if needed.
+    database_url_sync: str = (
+        "postgresql://zerebro:zerebro_dev@localhost:5432/zerebro"
+    )
 
     # --- LLM Providers ---
     openai_api_key: str = ""
     groq_api_key: str = ""
 
     # --- Model Defaults ---
-    builder_model: str = "openai:gpt-4o"
-    worker_model: str = "groq:qwen/qwen3-32b"
-    worker_fallback_model: str = "groq:llama-3.3-70b-versatile"
+    # Builder: high-reasoning model for creating agents via structured output.
+    # gpt-4.1 has superior instruction following and structured output vs gpt-4o.
+    builder_model: str = "openai:gpt-4.1"
+
+    # Worker: primary model for executing agent tasks.
+    # llama-3.3-70b-versatile is a Production model on Groq (stable, battle-tested).
+    worker_model: str = "groq:llama-3.3-70b-versatile"
+
+    # Worker fallback: used when the primary worker model fails.
+    # qwen3-32b is fast (400 tps) but Preview on Groq (may be deprecated).
+    worker_fallback_model: str = "groq:qwen/qwen3-32b"
 
     # --- MCP Servers ---
     # JSON array of MCPServerConfig objects. See api/app.py for format.
