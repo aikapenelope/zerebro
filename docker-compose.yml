@@ -1,6 +1,6 @@
 services:
   # ---------------------------------------------------------------------------
-  # PostgreSQL - Agent configs, run history, LangGraph checkpoints
+  # PostgreSQL - Agent configs, sessions, run history
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
@@ -14,21 +14,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zerebro}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # ---------------------------------------------------------------------------
-  # Redis - Pub/sub for streaming, task queues
-  # ---------------------------------------------------------------------------
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -58,12 +43,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-zerebro}:${POSTGRES_PASSWORD:-zerebro_dev}@postgres:5432/${POSTGRES_DB:-zerebro}
-      REDIS_URL: redis://redis:6379/0
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       phoenix:
         condition: service_started
@@ -86,5 +68,4 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   phoenix_data:
