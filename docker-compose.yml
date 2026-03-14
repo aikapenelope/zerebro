@@ -70,6 +70,20 @@ services:
     volumes:
       - ./backend/src:/app/src:cached
 
+  # ---------------------------------------------------------------------------
+  # Zerebro Frontend - Next.js
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:
   redis_data:

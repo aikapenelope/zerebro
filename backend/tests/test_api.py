@@ -20,8 +20,22 @@ from httpx import ASGITransport, AsyncClient
 # ---------------------------------------------------------------------------
 _STUBS = [
     "deepagents",
+    # langchain / langchain_core / langgraph have deep import chains
+    "langchain",
+    "langchain.agents",
+    "langchain.agents.structured_output",
     "langchain_core",
+    "langchain_core.language_models",
+    "langchain_core.language_models.chat_models",
     "langchain_core.messages",
+    "langchain_core.prompts",
+    "langchain_core.tools",
+    "langchain_mcp_adapters",
+    "langchain_mcp_adapters.client",
+    "langgraph",
+    "langgraph.graph",
+    "langgraph.graph.state",
+    "langgraph.prebuilt",
     "phoenix",
     "phoenix.otel",
     "openinference",
@@ -104,6 +118,50 @@ class TestAgentCRUD:
         list_resp = await client.get("/agents")
         ids = [a["id"] for a in list_resp.json()]
         assert data["id"] in ids
+
+
+    @pytest.mark.asyncio
+    async def test_update_agent(self, client: AsyncClient) -> None:
+        """PATCH /agents/{id} applies partial updates."""
+        resp = await client.patch(
+            "/agents/demo",
+            json={"name": "Updated Demo", "description": "new desc"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "Updated Demo"
+        assert data["description"] == "new desc"
+        # system_prompt should remain unchanged
+        assert data["system_prompt"] != ""
+
+    @pytest.mark.asyncio
+    async def test_update_nonexistent_agent(self, client: AsyncClient) -> None:
+        resp = await client.patch(
+            "/agents/nonexistent",
+            json={"name": "Nope"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_agent(self, client: AsyncClient) -> None:
+        # Create an agent to delete
+        create_resp = await client.post(
+            "/agents",
+            json={"name": "To Delete", "system_prompt": "delete me"},
+        )
+        agent_id = create_resp.json()["id"]
+
+        resp = await client.delete(f"/agents/{agent_id}")
+        assert resp.status_code == 204
+
+        # Verify it's gone
+        get_resp = await client.get(f"/agents/{agent_id}")
+        assert get_resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_agent(self, client: AsyncClient) -> None:
+        resp = await client.delete("/agents/nonexistent")
+        assert resp.status_code == 404
 
 
 class TestRunAgent:
