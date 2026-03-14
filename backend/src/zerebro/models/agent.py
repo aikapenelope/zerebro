@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 class ModelRole(str, Enum):
     """Determines which LLM tier to use for an agent."""
 
-    BUILDER = "builder"  # High-reasoning model (OpenAI/Anthropic)
+    BUILDER = "builder"  # High-reasoning model (Anthropic Claude)
     WORKER = "worker"  # Fast/cheap model (Groq)
 
 
