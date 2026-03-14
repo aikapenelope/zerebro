@@ -77,7 +77,7 @@ def _resolve_model_string(config: AgentConfig) -> str:
 def _resolve_fallback_model(config: AgentConfig) -> str | None:
     """Return a fallback model string, or None if no fallback is available.
 
-    Fallback only applies to worker agents (builder uses OpenAI which is
+    Fallback only applies to worker agents (builder uses Anthropic which is
     highly reliable). If the user set an explicit override, there is no
     automatic fallback.
     """

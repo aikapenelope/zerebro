@@ -111,8 +111,8 @@ def _validate_api_keys() -> None:
     fail with a cryptic auth error unless the keys are set.
     """
     missing: list[str] = []
-    if not settings.openai_api_key:
-        missing.append("OPENAI_API_KEY (required for builder agent)")
+    if not settings.anthropic_api_key:
+        missing.append("ANTHROPIC_API_KEY (required for builder agent)")
     if not settings.groq_api_key:
         missing.append("GROQ_API_KEY (required for worker agents)")
     if missing:
