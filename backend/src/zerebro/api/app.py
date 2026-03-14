@@ -34,7 +34,7 @@ from zerebro.config import settings
 from zerebro.core.mcp_manager import MCPManager
 from zerebro.core.runner import run_agent, set_mcp_manager, stream_agent
 from zerebro.core.tracing import init_tracing
-from zerebro.db.engine import async_session, init_db
+from zerebro.db.engine import async_session, run_migrations
 from zerebro.db.repositories import AgentRepository, RunRepository
 from zerebro.models.agent import AgentConfig, AgentUpdate, RunRequest, RunResult
 from zerebro.models.mcp import MCPServerConfig
@@ -107,7 +107,7 @@ async def _seed_demo_agent() -> None:
 async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     """Application startup / shutdown hooks."""
     init_tracing()
-    await init_db()
+    run_migrations()
     await _seed_demo_agent()
     logger.info("Zerebro backend started on %s:%s", settings.backend_host, settings.backend_port)
     yield

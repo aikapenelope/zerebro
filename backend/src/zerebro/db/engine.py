@@ -98,14 +98,44 @@ async def async_session() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Create all tables if they don't exist.
+    """Create all tables directly via ``CREATE TABLE IF NOT EXISTS``.
 
-    Safe to call multiple times -- uses ``CREATE TABLE IF NOT EXISTS``.
-    In production, prefer Alembic migrations.
+    Used by **tests only** (with in-memory SQLite).  The production app
+    uses ``run_migrations()`` instead so that Alembic tracks schema state.
     """
     from zerebro.db.models import Base
 
     engine = _get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables initialized")
+    logger.info("Database tables initialized (create_all)")
+
+
+def run_migrations() -> None:
+    """Run Alembic migrations to ``head``.
+
+    Called during application startup so the database schema is always
+    up-to-date.  This is a **synchronous** function because Alembic's
+    command API is synchronous (it manages its own async engine internally
+    via the async env.py template).
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_cfg = Config()
+    # Point at the migrations directory relative to the backend root.
+    # In Docker the workdir is /app; locally it's wherever you run from.
+    # We resolve the path from this file's location for reliability.
+    import pathlib
+
+    backend_root = pathlib.Path(__file__).resolve().parents[3]
+    alembic_cfg.set_main_option(
+        "script_location", str(backend_root / "migrations")
+    )
+
+    from zerebro.config import settings
+
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
+
+    command.upgrade(alembic_cfg, "head")
+    logger.info("Alembic migrations applied to head")

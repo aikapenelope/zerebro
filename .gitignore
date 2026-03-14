@@ -34,5 +34,5 @@ phoenix_data/
 # Postgres data
 postgres_data/
 
-# Redis data
-redis_data/
+# SQLite test databases
+*.db
